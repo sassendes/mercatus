@@ -205,12 +205,16 @@ func TestPendingChargeWithLostRefIsFoundAndRefunded(t *testing.T) {
 	}
 }
 
+type timeoutProvider struct{ flakyProvider }
+
+func (timeoutProvider) Charge(ctx context.Context, key string, amount int64, currency string) (string, error) {
+	return "", errors.New("provider timeout")
+}
+
 func TestUnknownChargeOutcomeStaysPending(t *testing.T) {
 	db := dbtest.New(t)
-	svc := NewPaymentService(repository.NewPaymentRepository(db), NewTestStripeProvider())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	p, err := svc.Charge(ctx, 5, charge())
+	svc := NewPaymentService(repository.NewPaymentRepository(db), &timeoutProvider{})
+	p, err := svc.Charge(context.Background(), 5, charge())
 	if !errors.Is(err, ErrPaymentFailed) || p == nil || p.Status != model.StatusPending {
 		t.Fatalf("p=%+v err=%v", p, err)
 	}
