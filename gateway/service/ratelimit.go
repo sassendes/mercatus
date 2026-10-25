@@ -15,15 +15,26 @@ type bucket struct {
 	last   time.Time
 }
 
+const defaultMaxBuckets = 200_000
+
 type RateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
-	rate    float64
-	burst   float64
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	rate       float64
+	burst      float64
+	maxBuckets int
 }
 
 func NewRateLimiter(ratePerSecond float64, burst int) *RateLimiter {
-	return &RateLimiter{buckets: map[string]*bucket{}, rate: ratePerSecond, burst: float64(burst)}
+	return &RateLimiter{buckets: map[string]*bucket{}, rate: ratePerSecond, burst: float64(burst), maxBuckets: defaultMaxBuckets}
+}
+
+func (rl *RateLimiter) evictIdle(now time.Time, idle time.Duration) {
+	for k, b := range rl.buckets {
+		if now.Sub(b.last) > idle {
+			delete(rl.buckets, k)
+		}
+	}
 }
 
 func (rl *RateLimiter) Allow(key string) (bool, time.Duration) {
@@ -32,6 +43,12 @@ func (rl *RateLimiter) Allow(key string) (bool, time.Duration) {
 	defer rl.mu.Unlock()
 	b, ok := rl.buckets[key]
 	if !ok {
+		if len(rl.buckets) >= rl.maxBuckets {
+			rl.evictIdle(now, time.Minute)
+			if len(rl.buckets) >= rl.maxBuckets {
+				rl.buckets = map[string]*bucket{}
+			}
+		}
 		b = &bucket{tokens: rl.burst, last: now}
 		rl.buckets[key] = b
 	}
@@ -54,11 +71,7 @@ func (rl *RateLimiter) Run(ctx context.Context) {
 			return
 		case now := <-t.C:
 			rl.mu.Lock()
-			for k, b := range rl.buckets {
-				if now.Sub(b.last) > 10*time.Minute {
-					delete(rl.buckets, k)
-				}
-			}
+			rl.evictIdle(now, 10*time.Minute)
 			rl.mu.Unlock()
 		}
 	}
@@ -67,7 +80,10 @@ func (rl *RateLimiter) Run(ctx context.Context) {
 func ClientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 	}
 	return host
 }

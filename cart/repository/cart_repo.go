@@ -35,13 +35,13 @@ func (r *CartRepository) GetOrCreateCart(ctx context.Context, userID int64) (*mo
 func (r *CartRepository) VariantInfo(ctx context.Context, variantID int64) (*model.VariantInfo, error) {
 	v := &model.VariantInfo{VariantID: variantID}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT p.seller_id, v.price, v.currency, COALESCE(GREATEST(st.on_hand - st.reserved, 0), 0)
+		`SELECT p.seller_id, s.user_id, v.price, v.currency, COALESCE(GREATEST(st.on_hand - st.reserved, 0), 0)
 		 FROM product_variants v
 		 JOIN products p ON p.id = v.product_id AND p.status = 'active'
 		 JOIN sellers s ON s.id = p.seller_id AND s.status = 'active'
 		 LEFT JOIN stock st ON st.variant_id = v.id
 		 WHERE v.id = $1 AND v.active`, variantID,
-	).Scan(&v.SellerID, &v.Price, &v.Currency, &v.Available)
+	).Scan(&v.SellerID, &v.SellerUserID, &v.Price, &v.Currency, &v.Available)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

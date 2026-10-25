@@ -17,6 +17,7 @@ var (
 	ErrNotFound     = errors.New("order not found")
 	ErrUnavailable  = errors.New("an item in your cart is no longer available")
 	ErrNotSeller    = errors.New("seller account required")
+	ErrOwnProduct   = errors.New("you cannot buy your own product")
 	ErrInvalidState = repository.ErrInvalidTransition
 )
 
@@ -59,6 +60,9 @@ func (s *OrderService) Create(ctx context.Context, buyerID int64, lines []model.
 		}
 		if p.Currency != "USD" {
 			return nil, ErrInvalidItem
+		}
+		if p.SellerUserID == buyerID {
+			return nil, ErrOwnProduct
 		}
 		so, ok := bySeller[p.SellerID]
 		if !ok {

@@ -317,6 +317,20 @@ func (s *CatalogService) Update(ctx context.Context, userID, productID int64, re
 	if req.ImageURL != nil && !validImageURL(*req.ImageURL) {
 		return nil, &ValidationError{"image_url must be an https URL"}
 	}
+	if req.Description != nil {
+		d := strings.TrimSpace(*req.Description)
+		if utf8.RuneCountInString(d) > 10000 {
+			return nil, &ValidationError{"description or brand too long"}
+		}
+		req.Description = &d
+	}
+	if req.Brand != nil {
+		b := strings.TrimSpace(*req.Brand)
+		if utf8.RuneCountInString(b) > 100 {
+			return nil, &ValidationError{"description or brand too long"}
+		}
+		req.Brand = &b
+	}
 	if err := s.validateCategory(ctx, req.CategoryID); err != nil {
 		return nil, err
 	}

@@ -116,6 +116,15 @@ func NewApp(cfg *config.Config, db *sql.DB) (*App, error) {
 	slog.Warn("payments run against the built-in test provider, no real money moves")
 	a.payments = paymentservice.NewPaymentService(paymentrepo.NewPaymentRepository(db), a.provider)
 	a.admin = adminservice.NewAdminService(adminrepo.NewAdminRepository(db))
+	a.auth.SetCodeDelivery(func(ctx context.Context, userID int64, email, code string) {
+		if _, err := a.notify.Send(ctx, &notificationmodel.SendRequest{
+			UserID: userID, Channel: notificationmodel.ChannelInApp,
+			Subject: "Verify your email",
+			Body:    "Your Mercatus verification code is " + code + ". It expires in 24 hours.",
+		}); err != nil {
+			slog.WarnContext(ctx, "could not deliver verification code", "user_id", userID, "error", err)
+		}
+	})
 
 	var store *mediaservice.S3
 	if cfg.S3Enabled() {
@@ -206,6 +215,7 @@ func (a *App) checkoutDeps() pipelineservice.Deps {
 		},
 		Release: a.stock.ReleaseOrder,
 		Commit:  a.stock.Commit,
+		Restock: a.stock.RestockOrder,
 		Charge: func(ctx context.Context, key string, buyerID int64, o *pipelineservice.OrderSummary) (int64, error) {
 			req := &paymentmodel.ChargeRequest{IdempotencyKey: key, OrderID: o.ID, AmountCents: o.TotalCents, Currency: o.Currency}
 			for _, s := range o.Splits {
@@ -220,6 +230,11 @@ func (a *App) checkoutDeps() pipelineservice.Deps {
 			return 0, err
 		},
 		RefundOrder: a.payments.RefundOrder,
+		Blocked: func(ctx context.Context, buyerID int64) (bool, error) {
+			var blocked bool
+			err := a.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM buyer_blocks WHERE user_id = $1)`, buyerID).Scan(&blocked)
+			return blocked, err
+		},
 		Notify: func(ctx context.Context, buyerID int64, subject, body string) {
 			if _, err := a.notify.Send(ctx, &notificationmodel.SendRequest{
 				UserID: buyerID, Channel: notificationmodel.ChannelInApp, Subject: subject, Body: body,
@@ -237,7 +252,7 @@ func (a *App) checkoutDeps() pipelineservice.Deps {
 			if u, err := a.auth.Me(ctx, buyerID); err == nil {
 				newAccount = time.Since(u.CreatedAt) < 7*24*time.Hour
 			}
-			decision, err := fc.Score(ctx, buyerID, amount, newAccount)
+			decision, err := fc.Score(ctx, buyerID, amount, newAccount, pipelineservice.CountryFrom(ctx))
 			if err != nil {
 				a.metrics.Inc("fraud_check_error")
 				if failOpen {
@@ -270,7 +285,7 @@ func (a *App) Router() (http.Handler, error) {
 	if a.cfg.TrustProxyHeaders {
 		r.Use(chimw.RealIP)
 	}
-	r.Use(observability.RequestLogger, chimw.Recoverer, a.metrics.Middleware, gateway.SecurityHeaders)
+	r.Use(observability.RequestLogger, chimw.Recoverer, a.metrics.Middleware, gateway.SecurityHeaders(a.cfg.TrustProxyHeaders))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -300,7 +315,7 @@ func (a *App) Router() (http.Handler, error) {
 		mount("payments", "/payments", paymenthandler.NewPaymentHandler(a.payments, secret).Routes())
 		mount("media", "/media", mediahandler.NewMediaHandler(a.media, secret).Routes())
 		mount("admin", "/admin", adminhandler.NewAdminHandler(a.admin, secret).Routes())
-		mount("checkout", "/checkout", pipelinehandler.NewPipelineHandler(a.checkout, secret).Routes())
+		mount("checkout", "/checkout", a.withCountry(pipelinehandler.NewPipelineHandler(a.checkout, secret).Routes()))
 		api.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
@@ -321,6 +336,20 @@ func (a *App) Router() (http.Handler, error) {
 		r.Handle("/*", spa)
 	}
 	return r, nil
+}
+
+func (a *App) withCountry(next http.Handler) http.Handler {
+	header := a.cfg.CountryHeader
+	if header == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := strings.ToUpper(strings.TrimSpace(r.Header.Get(header)))
+		if len(c) == 2 {
+			r = r.WithContext(pipelineservice.WithCountry(r.Context(), c))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *App) authLimit(next http.Handler) http.Handler {

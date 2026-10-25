@@ -18,6 +18,7 @@ var (
 	ErrProductNotFound = errors.New("product not found")
 	ErrNotFound        = errors.New("review not found")
 	ErrAlreadyVoted    = errors.New("you cannot vote on this review again")
+	ErrOwnProduct      = errors.New("you cannot review your own product")
 )
 
 type ReviewService struct {
@@ -42,6 +43,13 @@ func (s *ReviewService) Create(ctx context.Context, userID int64, req *model.Cre
 	}
 	if !ok {
 		return nil, ErrProductNotFound
+	}
+	own, err := s.reviews.OwnsProduct(ctx, userID, req.ProductID)
+	if err != nil {
+		return nil, err
+	}
+	if own {
+		return nil, ErrOwnProduct
 	}
 	verified, err := s.reviews.PurchasedProduct(ctx, userID, req.ProductID)
 	if err != nil {

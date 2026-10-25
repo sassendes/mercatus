@@ -59,3 +59,20 @@ func TestFraudApproveCharges(t *testing.T) {
 		t.Fatalf("charged=%d cancelled=%d", charged, cancelled)
 	}
 }
+
+func TestMarkPaidFailureRestocksCommittedStock(t *testing.T) {
+	db := dbtest.New(t)
+	sagas := repository.NewSagaRepository(db)
+	var charged, cancelled, restocked, refunded int
+	d := fraudDeps(FraudApprove, &charged, &cancelled)
+	d.MarkPaid = func(context.Context, int64) error { return errors.New("db down") }
+	d.Restock = func(context.Context, int64) error { restocked++; return nil }
+	d.RefundOrder = func(context.Context, int64) error { refunded++; return nil }
+	svc := NewCheckoutService(NewSagaService(sagas), sagas, d)
+	if _, err := svc.Checkout(context.Background(), 1, "markpaid-key-1"); !errors.Is(err, ErrCheckoutFailed) {
+		t.Fatalf("want checkout failure, got %v", err)
+	}
+	if restocked != 1 || refunded == 0 || cancelled != 1 {
+		t.Fatalf("restocked=%d refunded=%d cancelled=%d", restocked, refunded, cancelled)
+	}
+}

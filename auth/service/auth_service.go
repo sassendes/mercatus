@@ -34,11 +34,16 @@ func (e *ValidationError) Unwrap() error { return ErrInvalidInput }
 
 const refreshTTL = 30 * 24 * time.Hour
 
+type CodeDelivery func(ctx context.Context, userID int64, email, code string)
+
 type AuthService struct {
-	users     *repository.UserRepository
-	tokens    *repository.TokenRepository
-	dummyHash string
+	users       *repository.UserRepository
+	tokens      *repository.TokenRepository
+	dummyHash   string
+	deliverCode CodeDelivery
 }
+
+func (s *AuthService) SetCodeDelivery(fn CodeDelivery) { s.deliverCode = fn }
 
 func NewAuthService(users *repository.UserRepository, tokens *repository.TokenRepository) *AuthService {
 	dummy, _ := HashPassword("dummy-password-for-timing")
@@ -127,6 +132,9 @@ func (s *AuthService) Register(ctx context.Context, req *model.RegisterRequest) 
 		return nil, err
 	}
 	slog.InfoContext(ctx, "email verification code issued", "user_id", user.ID)
+	if s.deliverCode != nil {
+		s.deliverCode(ctx, user.ID, user.Email, code)
+	}
 	return user, nil
 }
 

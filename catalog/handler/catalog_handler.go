@@ -31,13 +31,10 @@ func (h *CatalogHandler) Routes() chi.Router {
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth(h.jwtSecret))
-		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireRole("seller"))
-			r.Get("/mine", h.ListMine)
-			r.Post("/products", h.CreateProduct)
-			r.Patch("/products/{id}", h.UpdateProduct)
-			r.Patch("/products/{id}/status", h.SetStatus)
-		})
+		r.Get("/mine", h.ListMine)
+		r.Post("/products", h.CreateProduct)
+		r.Patch("/products/{id}", h.UpdateProduct)
+		r.Patch("/products/{id}/status", h.SetStatus)
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("admin"))
 			r.Post("/categories", h.CreateCategory)

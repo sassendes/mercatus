@@ -91,8 +91,10 @@ func (s *PaymentService) Charge(ctx context.Context, buyerID int64, req *model.C
 
 	providerRef, err := s.provider.Charge(ctx, req.IdempotencyKey, req.AmountCents, currency)
 	if err != nil {
-		_ = s.payments.Fail(context.WithoutCancel(ctx), p.ID)
-		p.Status = model.StatusFailed
+		if errors.Is(err, ErrDeclined) {
+			_ = s.payments.Fail(context.WithoutCancel(ctx), p.ID)
+			p.Status = model.StatusFailed
+		}
 		return p, errors.Join(ErrPaymentFailed, err)
 	}
 
@@ -112,7 +114,7 @@ func (s *PaymentService) Charge(ctx context.Context, buyerID int64, req *model.C
 }
 
 func (s *PaymentService) undoCharge(ctx context.Context, p *model.Payment, cause error) error {
-	if err := s.provider.Refund(ctx, p.ProviderRef, p.AmountCents); err != nil {
+	if err := s.provider.Refund(ctx, refundKey(p.ID), p.ProviderRef, p.AmountCents); err != nil {
 		return errors.Join(ErrPaymentFailed, cause, err)
 	}
 	if err := s.payments.Fail(ctx, p.ID); err != nil {
@@ -138,39 +140,45 @@ func buildLedger(paymentID, buyerID int64, currency string, req *model.ChargeReq
 	})
 }
 
+func refundKey(paymentID int64) string { return "refund-" + strconv.FormatInt(paymentID, 10) }
+
 func (s *PaymentService) Refund(ctx context.Context, paymentID int64) error {
-	p, err := s.payments.FindByID(ctx, paymentID)
-	if err != nil {
-		return err
-	}
-	if p == nil {
-		return ErrNotRefundable
-	}
-	switch p.Status {
-	case model.StatusRefunded, model.StatusFailed:
-		return nil
-	case model.StatusPending:
-		if p.ProviderRef != "" {
-			if err := s.provider.Refund(ctx, p.ProviderRef, p.AmountCents); err != nil {
-				return err
+	err := s.payments.WithLocked(ctx, paymentID, func(l *repository.LockedPayment) error {
+		p := l.P
+		switch p.Status {
+		case model.StatusRefunded, model.StatusFailed:
+			return nil
+		case model.StatusPending:
+			ref := p.ProviderRef
+			if ref == "" {
+				found, err := s.provider.Lookup(ctx, p.IdempotencyKey)
+				if err != nil {
+					return err
+				}
+				ref = found
 			}
+			if ref != "" {
+				if err := s.provider.Refund(ctx, refundKey(p.ID), ref, p.AmountCents); err != nil {
+					return err
+				}
+			}
+			return l.Fail(ctx)
 		}
-		return s.payments.Fail(ctx, p.ID)
-	}
-	if err := s.provider.Refund(ctx, p.ProviderRef, p.AmountCents); err != nil {
-		return err
-	}
-	original, err := s.payments.Entries(ctx, p.ID)
-	if err != nil {
-		return err
-	}
-	reversal := make([]model.LedgerEntry, 0, len(original))
-	for _, e := range original {
-		reversal = append(reversal, model.LedgerEntry{PaymentID: p.ID, Account: e.Account, AmountCents: -e.AmountCents, Currency: e.Currency})
-	}
-	err = s.payments.Refund(ctx, p.ID, reversal)
+		if err := s.provider.Refund(ctx, refundKey(p.ID), p.ProviderRef, p.AmountCents); err != nil {
+			return err
+		}
+		original, err := l.Entries(ctx)
+		if err != nil {
+			return err
+		}
+		reversal := make([]model.LedgerEntry, 0, len(original))
+		for _, e := range original {
+			reversal = append(reversal, model.LedgerEntry{PaymentID: p.ID, Account: e.Account, AmountCents: -e.AmountCents, Currency: e.Currency})
+		}
+		return l.Refund(ctx, reversal)
+	})
 	if errors.Is(err, repository.ErrNotTransitable) {
-		return nil
+		return ErrNotRefundable
 	}
 	return err
 }

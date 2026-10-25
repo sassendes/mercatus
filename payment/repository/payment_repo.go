@@ -80,12 +80,24 @@ func (r *PaymentRepository) InsertPending(ctx context.Context, p *model.Payment)
 	return nil
 }
 
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 func (r *PaymentRepository) transitionWithLedger(ctx context.Context, paymentID int64, from, to, providerRef string, entries []model.LedgerEntry) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := transitionTx(ctx, tx, paymentID, from, to, providerRef, entries); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func transitionTx(ctx context.Context, tx execer, paymentID int64, from, to, providerRef string, entries []model.LedgerEntry) error {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE payments SET status = $1, provider_ref = COALESCE(NULLIF($2, ''), provider_ref), updated_at = now()
 		 WHERE id = $3 AND status = $4`, to, providerRef, paymentID, from)
@@ -107,15 +119,49 @@ func (r *PaymentRepository) transitionWithLedger(ctx context.Context, paymentID 
 	if sum != 0 {
 		return errors.New("ledger entries do not balance")
 	}
+	return nil
+}
+
+type LockedPayment struct {
+	tx *sql.Tx
+	P  *model.Payment
+}
+
+func (l *LockedPayment) Entries(ctx context.Context) ([]model.LedgerEntry, error) {
+	return entriesFrom(ctx, l.tx, l.P.ID)
+}
+
+func (l *LockedPayment) Refund(ctx context.Context, entries []model.LedgerEntry) error {
+	return transitionTx(ctx, l.tx, l.P.ID, model.StatusCaptured, model.StatusRefunded, "", entries)
+}
+
+func (l *LockedPayment) Fail(ctx context.Context) error {
+	_, err := l.tx.ExecContext(ctx,
+		`UPDATE payments SET status = 'failed', updated_at = now() WHERE id = $1 AND status = 'pending'`, l.P.ID)
+	return err
+}
+
+func (r *PaymentRepository) WithLocked(ctx context.Context, paymentID int64, fn func(*LockedPayment) error) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	p, err := scanPayment(tx.QueryRowContext(ctx, `SELECT `+paymentColumns+` FROM payments WHERE id = $1 FOR UPDATE`, paymentID))
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return ErrNotTransitable
+	}
+	if err := fn(&LockedPayment{tx: tx, P: p}); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 func (r *PaymentRepository) Capture(ctx context.Context, paymentID int64, providerRef string, entries []model.LedgerEntry) error {
 	return r.transitionWithLedger(ctx, paymentID, model.StatusPending, model.StatusCaptured, providerRef, entries)
-}
-
-func (r *PaymentRepository) Refund(ctx context.Context, paymentID int64, entries []model.LedgerEntry) error {
-	return r.transitionWithLedger(ctx, paymentID, model.StatusCaptured, model.StatusRefunded, "", entries)
 }
 
 func (r *PaymentRepository) SetProviderRef(ctx context.Context, paymentID int64, providerRef string) error {
@@ -131,7 +177,11 @@ func (r *PaymentRepository) Fail(ctx context.Context, paymentID int64) error {
 }
 
 func (r *PaymentRepository) Entries(ctx context.Context, paymentID int64) ([]model.LedgerEntry, error) {
-	rows, err := r.db.QueryContext(ctx,
+	return entriesFrom(ctx, r.db, paymentID)
+}
+
+func entriesFrom(ctx context.Context, q execer, paymentID int64) ([]model.LedgerEntry, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, payment_id, account, amount_cents, currency, created_at FROM ledger_entries WHERE payment_id = $1 ORDER BY id`, paymentID)
 	if err != nil {
 		return nil, err

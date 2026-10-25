@@ -54,6 +54,7 @@ type PricedLine struct {
 	VariantID      int64
 	ProductID      int64
 	SellerID       int64
+	SellerUserID   int64
 	Title          string
 	UnitPriceCents int64
 	Currency       string

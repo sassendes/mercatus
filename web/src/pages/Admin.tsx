@@ -30,6 +30,7 @@ const actions: Record<string, string[]> = {
   product: ["remove", "reinstate"],
   seller: ["suspend", "reinstate"],
   review: ["remove"],
+  buyer: ["block", "unblock"],
 };
 
 export default function Admin() {

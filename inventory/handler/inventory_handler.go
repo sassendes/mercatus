@@ -27,7 +27,7 @@ func (h *InventoryHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/{variantID}", h.GetStock)
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireAuth(h.jwtSecret), middleware.RequireRole("seller"))
+		r.Use(middleware.RequireAuth(h.jwtSecret))
 		r.Put("/", h.SetStock)
 	})
 	return r

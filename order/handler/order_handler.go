@@ -26,7 +26,7 @@ func (h *OrderHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.RequireAuth(h.jwtSecret))
 	r.Get("/", h.List)
-	r.With(middleware.RequireRole("seller")).Get("/sales", h.Sales)
+	r.Get("/sales", h.Sales)
 	r.Get("/{id}", h.Get)
 	return r
 }

@@ -22,7 +22,7 @@ func NewOrderRepository(db *sql.DB) *OrderRepository {
 
 func (r *OrderRepository) PriceLines(ctx context.Context, variantIDs []int64) (map[int64]*model.PricedLine, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT v.id, p.id, p.seller_id, p.title, v.price, v.currency, s.commission_rate,
+		`SELECT v.id, p.id, p.seller_id, s.user_id, p.title, v.price, v.currency, s.commission_rate,
 		        (v.active AND p.status = 'active' AND s.status = 'active')
 		 FROM product_variants v
 		 JOIN products p ON p.id = v.product_id
@@ -35,7 +35,7 @@ func (r *OrderRepository) PriceLines(ctx context.Context, variantIDs []int64) (m
 	out := map[int64]*model.PricedLine{}
 	for rows.Next() {
 		l := &model.PricedLine{}
-		if err := rows.Scan(&l.VariantID, &l.ProductID, &l.SellerID, &l.Title, &l.UnitPriceCents, &l.Currency,
+		if err := rows.Scan(&l.VariantID, &l.ProductID, &l.SellerID, &l.SellerUserID, &l.Title, &l.UnitPriceCents, &l.Currency,
 			&l.CommissionBps, &l.Purchasable); err != nil {
 			return nil, err
 		}

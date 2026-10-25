@@ -49,7 +49,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
 	case errors.As(err, &ve):
 		writeError(w, http.StatusBadRequest, ve.Msg)
-	case errors.Is(err, service.ErrAlreadySeller):
+	case errors.Is(err, service.ErrAlreadySeller), errors.Is(err, service.ErrStripeTaken), errors.Is(err, service.ErrStripeConnected):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

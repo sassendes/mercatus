@@ -12,6 +12,7 @@ import (
 var (
 	ErrAlreadySeller = errors.New("user is already a seller")
 	ErrDuplicateSlug = errors.New("store slug taken")
+	ErrStripeTaken   = errors.New("stripe account already linked")
 )
 
 type SellerRepository struct {
@@ -86,6 +87,9 @@ func (r *SellerRepository) ActivateWithStripe(ctx context.Context, id int64, acc
 		`UPDATE sellers SET stripe_account_id = $1, payout_enabled = true,
 		        status = CASE WHEN status = 'suspended' THEN status ELSE 'active' END, updated_at = now()
 		 WHERE id = $2`, acct, id)
+	if database.IsUniqueViolation(err) {
+		return ErrStripeTaken
+	}
 	if err != nil {
 		return err
 	}

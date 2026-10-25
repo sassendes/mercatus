@@ -14,6 +14,7 @@ var (
 	ErrVariantUnavailable = errors.New("this item is not available")
 	ErrInsufficientStock  = errors.New("not enough stock for the requested quantity")
 	ErrTooManyItems       = errors.New("cart is full")
+	ErrOwnProduct         = errors.New("you cannot buy your own product")
 )
 
 const (
@@ -64,6 +65,9 @@ func (s *CartService) setQuantity(ctx context.Context, userID, variantID int64, 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if info.SellerUserID == userID {
+		return nil, ErrOwnProduct
 	}
 	current, err := s.carts.CurrentQuantity(ctx, cart.ID, variantID)
 	if err != nil {

@@ -94,6 +94,10 @@ func (s *InventoryService) ReleaseOrder(ctx context.Context, orderID int64) erro
 	return s.inv.ReleaseOrder(ctx, orderID)
 }
 
+func (s *InventoryService) RestockOrder(ctx context.Context, orderID int64) error {
+	return s.inv.RestockOrder(ctx, orderID)
+}
+
 func (s *InventoryService) ExpireStale(ctx context.Context) (int, error) {
 	total := 0
 	for {

@@ -26,6 +26,11 @@ var effects = map[string]map[string]string{
 	"review": {
 		"remove": `DELETE FROM reviews WHERE id = $1`,
 	},
+	"buyer": {
+		"block": `INSERT INTO buyer_blocks (user_id, created_at) SELECT id, now() FROM users WHERE id = $1
+			ON CONFLICT (user_id) DO UPDATE SET created_at = buyer_blocks.created_at`,
+		"unblock": `DELETE FROM buyer_blocks WHERE user_id = $1`,
+	},
 }
 
 func Supported(target, action string) bool {

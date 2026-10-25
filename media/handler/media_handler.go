@@ -46,7 +46,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
 	case errors.Is(err, service.ErrDisabled):
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
-	case errors.Is(err, service.ErrBadContentType), errors.Is(err, service.ErrBadKind), errors.Is(err, service.ErrNotUploaded):
+	case errors.Is(err, service.ErrBadContentType), errors.Is(err, service.ErrBadKind), errors.Is(err, service.ErrBadSize), errors.Is(err, service.ErrNotUploaded):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, service.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())

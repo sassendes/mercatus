@@ -28,7 +28,11 @@ func (s *SagaService) Run(ctx context.Context, saga *model.Saga, steps []Step) e
 	var completed []Step
 	for _, step := range steps {
 		if err := s.sagas.SetStep(ctx, saga.ID, step.Name); err != nil {
-			return err
+			_ = s.sagas.SetStatus(ctx, saga.ID, model.SagaCompensating)
+			s.compensate(ctx, saga.ID, completed)
+			_ = s.sagas.SetStatus(ctx, saga.ID, model.SagaFailed)
+			saga.Status = model.SagaFailed
+			return fmt.Errorf("%w at %s: %w", ErrStepFailed, step.Name, err)
 		}
 		if err := step.Do(ctx); err != nil {
 			_ = s.sagas.RecordStep(ctx, saga.ID, step.Name, "failed")

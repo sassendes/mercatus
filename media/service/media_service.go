@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ var (
 	ErrNotFound       = errors.New("media not found")
 	ErrNotUploaded    = errors.New("upload not found in storage or failed validation")
 	ErrDisabled       = errors.New("media storage is not configured")
+	ErrBadSize        = errors.New("size must be between 1 byte and 10 MiB")
 )
 
 const (
@@ -48,6 +51,7 @@ type PresignResult struct {
 	UploadURL string            `json:"upload_url"`
 	Method    string            `json:"method"`
 	PublicURL string            `json:"public_url"`
+	Headers   map[string]string `json:"headers"`
 	ExpiresIn int               `json:"expires_in"`
 	MaxBytes  int               `json:"max_bytes"`
 }
@@ -65,15 +69,23 @@ func (s *MediaService) Presign(ctx context.Context, ownerID int64, req *model.Pr
 	if !allowedKinds[req.Kind] {
 		return nil, ErrBadKind
 	}
+	if req.Size <= 0 || req.Size > maxUploadBytes {
+		return nil, ErrBadSize
+	}
 	key := req.Kind + "/" + randHex(16) + "." + ext
 	m := &model.MediaAsset{OwnerID: ownerID, Kind: req.Kind, ObjectKey: key, ContentType: req.ContentType}
 	if err := s.media.Create(ctx, m); err != nil {
 		return nil, err
 	}
+	headers := map[string]string{
+		"Content-Type":   req.ContentType,
+		"Content-Length": strconv.FormatInt(req.Size, 10),
+	}
 	return &PresignResult{
 		Asset:     m,
-		UploadURL: s.store.Presign(http.MethodPut, key, presignTTL, time.Now()),
+		UploadURL: s.store.PresignWithHeaders(http.MethodPut, key, presignTTL, time.Now(), headers),
 		Method:    http.MethodPut,
+		Headers:   headers,
 		PublicURL: s.store.PublicURL(key),
 		ExpiresIn: int(presignTTL.Seconds()),
 		MaxBytes:  maxUploadBytes,
@@ -92,7 +104,13 @@ func (s *MediaService) Confirm(ctx context.Context, id, ownerID int64) (*model.M
 		return nil, ErrNotFound
 	}
 	size, ct, err := s.store.Head(ctx, m.ObjectKey)
-	if err != nil || size <= 0 || size > maxUploadBytes || (ct != "" && !strings.HasPrefix(ct, m.ContentType)) {
+	if err != nil {
+		return nil, ErrNotUploaded
+	}
+	if size <= 0 || size > maxUploadBytes || strings.TrimSpace(strings.Split(ct, ";")[0]) != m.ContentType {
+		if derr := s.store.Delete(ctx, m.ObjectKey); derr != nil {
+			slog.WarnContext(ctx, "could not delete rejected upload", "key", m.ObjectKey, "error", derr)
+		}
 		return nil, ErrNotUploaded
 	}
 	if err := s.media.MarkReady(ctx, id, ownerID); err != nil {

@@ -62,7 +62,8 @@ Point an Ingress at the `mercatus` service on port 80. Scrape metrics on port 90
 | `SEARCH_URL` | empty | e.g. `http://mercatus-search:8092`. Without it, search falls back to Postgres |
 | `FRAUD_URL` | empty | e.g. `http://mercatus-fraud:8093`. Without it, checkout skips fraud scoring |
 | `FRAUD_FAIL_OPEN` | `false` | approve orders when the fraud engine is unreachable instead of declining them |
-| `INTERNAL_TOKEN` | empty | shared bearer token between the app and the engines |
+| `INTERNAL_TOKEN` | empty | shared bearer token between the app and the engines. Required (16+ chars) when `SEARCH_URL` or `FRAUD_URL` is set. The engines refuse to start without it unless `ALLOW_NO_TOKEN=true` |
+| `COUNTRY_HEADER` | empty | trusted ingress header carrying the client country (e.g. `CF-IPCountry`), passed to fraud scoring |
 | `TRUST_PROXY_HEADERS` | `false` | set `true` behind an ingress so rate limits use the real client IP |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `20` / `60` | per client IP, per pod |
 | `CORS_ORIGINS` | empty | comma list, only needed if the API is called from another origin |

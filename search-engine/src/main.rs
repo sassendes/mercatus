@@ -160,6 +160,11 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() {
     let token = std::env::var("INTERNAL_TOKEN").ok().filter(|t| !t.is_empty()).map(Arc::new);
+    let allow_open = std::env::var("ALLOW_NO_TOKEN").map(|v| v == "true").unwrap_or(false);
+    if token.is_none() && !allow_open {
+        log("error", "INTERNAL_TOKEN is required, set ALLOW_NO_TOKEN=true to run without auth", serde_json::json!({}));
+        std::process::exit(1);
+    }
     let state = AppState { idx: Arc::new(RwLock::new(SearchIndex::new())), token };
 
     let protected = Router::new()

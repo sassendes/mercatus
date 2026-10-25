@@ -18,6 +18,8 @@ var (
 	ErrNotFound        = errors.New("seller not found")
 	ErrInvalidInput    = errors.New("invalid input")
 	ErrSuspended       = errors.New("seller account is suspended")
+	ErrStripeTaken     = errors.New("this stripe account is already linked to another store")
+	ErrStripeConnected = errors.New("a stripe account is already connected, contact support to change it")
 	stripeAccountRegex = regexp.MustCompile(`^acct_[A-Za-z0-9]{8,32}$`)
 )
 
@@ -128,7 +130,13 @@ func (s *SellerService) ConnectStripe(ctx context.Context, userID int64, stripeA
 	if seller.Status == model.StatusSuspended {
 		return nil, ErrSuspended
 	}
+	if seller.StripeAccountID != "" && seller.StripeAccountID != stripeAccountID {
+		return nil, ErrStripeConnected
+	}
 	if err := s.sellers.ActivateWithStripe(ctx, seller.ID, stripeAccountID); err != nil {
+		if errors.Is(err, repository.ErrStripeTaken) {
+			return nil, ErrStripeTaken
+		}
 		return nil, err
 	}
 	return s.GetByUserID(ctx, userID)

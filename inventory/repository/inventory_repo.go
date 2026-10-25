@@ -153,10 +153,10 @@ type heldRow struct {
 	qty       int
 }
 
-func lockHeld(ctx context.Context, tx *sql.Tx, orderID int64) ([]heldRow, error) {
+func lockByStatus(ctx context.Context, tx *sql.Tx, orderID int64, status string) ([]heldRow, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, variant_id, quantity FROM reservations
-		 WHERE order_id = $1 AND status = 'held' ORDER BY variant_id FOR UPDATE`, orderID)
+		 WHERE order_id = $1 AND status = $2 ORDER BY variant_id FOR UPDATE`, orderID, status)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +172,10 @@ func lockHeld(ctx context.Context, tx *sql.Tx, orderID int64) ([]heldRow, error)
 	return out, rows.Err()
 }
 
+func lockHeld(ctx context.Context, tx *sql.Tx, orderID int64) ([]heldRow, error) {
+	return lockByStatus(ctx, tx, orderID, "held")
+}
+
 func (r *InventoryRepository) CommitOrder(ctx context.Context, orderID int64) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -181,6 +185,16 @@ func (r *InventoryRepository) CommitOrder(ctx context.Context, orderID int64) er
 	held, err := lockHeld(ctx, tx, orderID)
 	if err != nil {
 		return err
+	}
+	for _, h := range held {
+		var expired bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT expires_at <= now() FROM reservations WHERE id = $1`, h.id).Scan(&expired); err != nil {
+			return err
+		}
+		if expired {
+			return ErrReservationGone
+		}
 	}
 	if len(held) == 0 {
 		var committed int
@@ -231,6 +245,35 @@ func (r *InventoryRepository) ReleaseOrder(ctx context.Context, orderID int64) e
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE reservations SET status = 'released' WHERE order_id = $1 AND status = 'held'`, orderID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *InventoryRepository) RestockOrder(ctx context.Context, orderID int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	committed, err := lockByStatus(ctx, tx, orderID, "committed")
+	if err != nil {
+		return err
+	}
+	for _, h := range committed {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE stock SET on_hand = on_hand + $1, updated_at = now() WHERE variant_id = $2`,
+			h.qty, h.variantID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE product_variants SET stock = stock + $1, updated_at = now() WHERE id = $2`,
+			h.qty, h.variantID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE reservations SET status = 'restocked' WHERE order_id = $1 AND status = 'committed'`, orderID); err != nil {
 		return err
 	}
 	return tx.Commit()

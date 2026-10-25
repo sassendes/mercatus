@@ -23,6 +23,7 @@ type Config struct {
 	FraudURL             string
 	FraudFailOpen        bool
 	InternalToken        string
+	CountryHeader        string
 	CORSOrigins          []string
 	TrustProxyHeaders    bool
 	RateLimitRPS         float64
@@ -61,6 +62,7 @@ func Load() (*Config, error) {
 		FraudURL:             strings.TrimRight(os.Getenv("FRAUD_URL"), "/"),
 		FraudFailOpen:        envBool("FRAUD_FAIL_OPEN", false),
 		InternalToken:        os.Getenv("INTERNAL_TOKEN"),
+		CountryHeader:        strings.TrimSpace(os.Getenv("COUNTRY_HEADER")),
 		CORSOrigins:          envList("CORS_ORIGINS"),
 		TrustProxyHeaders:    envBool("TRUST_PROXY_HEADERS", false),
 		RateLimitRPS:         envFloat("RATE_LIMIT_RPS", 20),
@@ -98,6 +100,9 @@ func (c *Config) RequireServe() error {
 	}
 	if len(c.JWTSecret) < 32 {
 		return errors.New("JWT_SECRET is required and must be at least 32 characters")
+	}
+	if (c.SearchURL != "" || c.FraudURL != "") && len(c.InternalToken) < 16 {
+		return errors.New("INTERNAL_TOKEN of at least 16 characters is required when SEARCH_URL or FRAUD_URL is set")
 	}
 	if c.RateLimitRPS <= 0 || c.RateLimitBurst <= 0 {
 		return fmt.Errorf("RATE_LIMIT_RPS and RATE_LIMIT_BURST must be positive")

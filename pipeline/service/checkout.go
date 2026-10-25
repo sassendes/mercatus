@@ -85,9 +85,11 @@ type Deps struct {
 	Reserve     func(ctx context.Context, orderID int64, lines []Line) error
 	Release     func(ctx context.Context, orderID int64) error
 	Commit      func(ctx context.Context, orderID int64) error
+	Restock     func(ctx context.Context, orderID int64) error
 	Charge      func(ctx context.Context, key string, buyerID int64, order *OrderSummary) (int64, error)
 	RefundOrder func(ctx context.Context, orderID int64) error
 	Fraud       func(ctx context.Context, buyerID int64, amountCents int64) (FraudDecision, error)
+	Blocked     func(ctx context.Context, buyerID int64) (bool, error)
 	Notify      func(ctx context.Context, buyerID int64, subject, body string)
 }
 
@@ -118,6 +120,8 @@ func publicError(msg string) string {
 		return ErrFraudDeclined.Error()
 	case strings.Contains(msg, ErrFraudReview.Error()):
 		return "this order needs a manual check before it can go through"
+	case strings.Contains(msg, "your own product"):
+		return "you cannot buy your own product"
 	case strings.Contains(msg, "no longer available"):
 		return "an item in your cart is no longer available"
 	default:
@@ -177,6 +181,19 @@ func (c *CheckoutService) Checkout(ctx context.Context, buyerID int64, key strin
 		return fail(err)
 	}
 
+	if c.deps.Blocked != nil {
+		blocked, err := c.deps.Blocked(ctx, buyerID)
+		if err != nil {
+			_ = c.deps.CancelOrder(ctx, order.ID)
+			return fail(err)
+		}
+		if blocked {
+			slog.WarnContext(ctx, "blocked buyer attempted checkout", "order_id", order.ID, "buyer_id", buyerID)
+			_ = c.deps.CancelOrder(ctx, order.ID)
+			return fail(ErrFraudDeclined)
+		}
+	}
+
 	if c.deps.Fraud != nil {
 		decision, err := c.deps.Fraud(ctx, buyerID, order.TotalCents)
 		if err != nil {
@@ -212,11 +229,13 @@ func (c *CheckoutService) Checkout(ctx context.Context, buyerID int64, key strin
 			Undo: func(ctx context.Context) error { return c.deps.RefundOrder(ctx, order.ID) },
 		},
 		{
+			Name: "commit",
+			Do:   func(ctx context.Context) error { return c.deps.Commit(ctx, order.ID) },
+			Undo: func(ctx context.Context) error { return c.restock(ctx, order.ID) },
+		},
+		{
 			Name: "confirm",
 			Do: func(ctx context.Context) error {
-				if err := c.deps.Commit(ctx, order.ID); err != nil {
-					return err
-				}
 				return retry(ctx, 3, func(ctx context.Context) error { return c.deps.MarkPaid(ctx, order.ID) })
 			},
 		},
@@ -233,14 +252,25 @@ func (c *CheckoutService) Checkout(ctx context.Context, buyerID int64, key strin
 		return resultOf(saga), errors.Join(ErrCheckoutFailed, err)
 	}
 
+	c.finish(ctx, buyerID, order.ID)
+	return resultOf(saga), nil
+}
+
+func (c *CheckoutService) finish(ctx context.Context, buyerID, orderID int64) {
 	if err := c.deps.ClearCart(ctx, buyerID); err != nil {
 		slog.WarnContext(ctx, "could not clear cart after checkout", "buyer_id", buyerID, "error", err)
 	}
 	if c.deps.Notify != nil {
 		c.deps.Notify(ctx, buyerID, "Order confirmed",
-			"Your order #"+strconv.FormatInt(order.ID, 10)+" is paid. Each seller delivers your software directly, check your email and this inbox.")
+			"Your order #"+strconv.FormatInt(orderID, 10)+" is paid. Each seller delivers your software directly, check your email and this inbox.")
 	}
-	return resultOf(saga), nil
+}
+
+func (c *CheckoutService) restock(ctx context.Context, orderID int64) error {
+	if c.deps.Restock == nil {
+		return nil
+	}
+	return c.deps.Restock(ctx, orderID)
 }
 
 func (c *CheckoutService) Get(ctx context.Context, buyerID, sagaID int64) (*model.Saga, []*model.SagaStep, error) {
@@ -280,11 +310,12 @@ func (c *CheckoutService) recover(ctx context.Context, s *model.Saga) {
 	}
 	if status == "paid" {
 		_ = c.sagas.SetStatus(ctx, s.ID, model.SagaCompleted)
+		c.finish(ctx, s.BuyerID, s.OrderID)
 		log.InfoContext(ctx, "saga recovery: order already paid, marked completed")
 		return
 	}
 	var errs []error
-	errs = append(errs, c.deps.RefundOrder(ctx, s.OrderID), c.deps.Release(ctx, s.OrderID))
+	errs = append(errs, c.deps.RefundOrder(ctx, s.OrderID), c.deps.Release(ctx, s.OrderID), c.restock(ctx, s.OrderID))
 	if status == "pending" {
 		errs = append(errs, c.deps.CancelOrder(ctx, s.OrderID))
 	}
@@ -295,6 +326,17 @@ func (c *CheckoutService) recover(ctx context.Context, s *model.Saga) {
 	_ = c.sagas.SetError(ctx, s.ID, "recovered after interruption")
 	_ = c.sagas.SetStatus(ctx, s.ID, model.SagaFailed)
 	log.WarnContext(ctx, "saga recovery: compensated interrupted checkout")
+}
+
+type countryKey struct{}
+
+func WithCountry(ctx context.Context, country string) context.Context {
+	return context.WithValue(ctx, countryKey{}, country)
+}
+
+func CountryFrom(ctx context.Context) string {
+	c, _ := ctx.Value(countryKey{}).(string)
+	return c
 }
 
 func retry(ctx context.Context, attempts int, fn func(ctx context.Context) error) error {

@@ -10,7 +10,13 @@ const contentSecurityPolicy = "default-src 'self'; img-src 'self' https: data: b
 	"script-src 'self'; connect-src 'self' https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; " +
 	"frame-ancestors 'none'; form-action 'self'"
 
-func SecurityHeaders(next http.Handler) http.Handler {
+func SecurityHeaders(trustProxy bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return securityHeaders(next, trustProxy)
+	}
+}
+
+func securityHeaders(next http.Handler, trustProxy bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -19,7 +25,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		if r.TLS != nil || (trustProxy && r.Header.Get("X-Forwarded-Proto") == "https") {
 			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)

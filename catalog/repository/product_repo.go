@@ -257,7 +257,7 @@ func (r *ProductRepository) Update(ctx context.Context, productID, sellerID int6
 		`UPDATE products SET
 			title = COALESCE($1, title),
 			description = COALESCE($2, description),
-			category_id = COALESCE($3, category_id),
+			category_id = CASE WHEN $3::bigint = 0 THEN NULL ELSE COALESCE($3::bigint, category_id) END,
 			brand = COALESCE($4, brand),
 			image_url = COALESCE($5, image_url),
 			updated_at = now()

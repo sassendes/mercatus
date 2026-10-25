@@ -29,6 +29,14 @@ func (r *ReviewRepository) ProductReviewable(ctx context.Context, productID int6
 	return ok, err
 }
 
+func (r *ReviewRepository) OwnsProduct(ctx context.Context, userID, productID int64) (bool, error) {
+	var ok bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM products p JOIN sellers s ON s.id = p.seller_id WHERE p.id = $1 AND s.user_id = $2)`,
+		productID, userID).Scan(&ok)
+	return ok, err
+}
+
 func (r *ReviewRepository) PurchasedProduct(ctx context.Context, userID, productID int64) (bool, error) {
 	var ok bool
 	err := r.db.QueryRowContext(ctx,

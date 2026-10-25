@@ -47,7 +47,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func fail(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
-	case errors.Is(err, service.ErrInvalidQuantity), errors.Is(err, service.ErrTooManyItems):
+	case errors.Is(err, service.ErrInvalidQuantity), errors.Is(err, service.ErrTooManyItems), errors.Is(err, service.ErrOwnProduct):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, service.ErrItemNotFound), errors.Is(err, service.ErrVariantUnavailable):
 		writeError(w, http.StatusNotFound, err.Error())

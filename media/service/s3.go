@@ -74,6 +74,24 @@ func hmacSHA256(key []byte, data string) []byte {
 }
 
 func (s *S3) Presign(method, key string, expires time.Duration, now time.Time) string {
+	return s.PresignWithHeaders(method, key, expires, now, nil)
+}
+
+func (s *S3) PresignWithHeaders(method, key string, expires time.Duration, now time.Time, headers map[string]string) string {
+	signed := map[string]string{"host": s.host}
+	for k, v := range headers {
+		signed[strings.ToLower(k)] = strings.TrimSpace(v)
+	}
+	names := make([]string, 0, len(signed))
+	for k := range signed {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	var canonHeaders strings.Builder
+	for _, k := range names {
+		canonHeaders.WriteString(k + ":" + signed[k] + "\n")
+	}
+	signedHeaders := strings.Join(names, ";")
 	now = now.UTC()
 	amzDate := now.Format("20060102T150405Z")
 	date := now.Format("20060102")
@@ -83,7 +101,7 @@ func (s *S3) Presign(method, key string, expires time.Duration, now time.Time) s
 		"X-Amz-Credential":    s.cfg.AccessKey + "/" + scope,
 		"X-Amz-Date":          amzDate,
 		"X-Amz-Expires":       strconv.Itoa(int(expires.Seconds())),
-		"X-Amz-SignedHeaders": "host",
+		"X-Amz-SignedHeaders": signedHeaders,
 	}
 	keys := make([]string, 0, len(params))
 	for k := range params {
@@ -96,7 +114,7 @@ func (s *S3) Presign(method, key string, expires time.Duration, now time.Time) s
 	}
 	query := strings.Join(q, "&")
 	path := s.objectPath(key)
-	canonical := strings.Join([]string{method, path, query, "host:" + s.host, "", "host", "UNSIGNED-PAYLOAD"}, "\n")
+	canonical := strings.Join([]string{method, path, query, canonHeaders.String(), signedHeaders, "UNSIGNED-PAYLOAD"}, "\n")
 	sum := sha256.Sum256([]byte(canonical))
 	toSign := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, hex.EncodeToString(sum[:])}, "\n")
 	k := hmacSHA256([]byte("AWS4"+s.cfg.SecretKey), date)
@@ -128,4 +146,20 @@ func (s *S3) Head(ctx context.Context, key string) (size int64, contentType stri
 		return 0, "", fmt.Errorf("object not found (status %d)", resp.StatusCode)
 	}
 	return resp.ContentLength, resp.Header.Get("Content-Type"), nil
+}
+
+func (s *S3) Delete(ctx context.Context, key string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, s.Presign(http.MethodDelete, key, time.Minute, time.Now()), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("delete failed (status %d)", resp.StatusCode)
+	}
+	return nil
 }

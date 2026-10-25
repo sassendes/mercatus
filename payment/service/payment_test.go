@@ -119,7 +119,11 @@ func (f *flakyProvider) Charge(ctx context.Context, key string, amount int64, cu
 	return "pi_flaky_" + key, nil
 }
 
-func (f *flakyProvider) Refund(ctx context.Context, ref string, amount int64) error {
+func (f *flakyProvider) Lookup(ctx context.Context, key string) (string, error) {
+	return "", nil
+}
+
+func (f *flakyProvider) Refund(ctx context.Context, key, ref string, amount int64) error {
 	if f.failRef {
 		return errors.New("provider refund unavailable")
 	}
@@ -175,5 +179,39 @@ func TestPendingChargeWithProviderRefIsRefundedLater(t *testing.T) {
 	db.QueryRow(`SELECT status FROM payments WHERE id = $1`, p.ID).Scan(&st)
 	if len(prov.refunded) != 1 || st != "failed" {
 		t.Fatalf("refunds=%v status=%s", prov.refunded, st)
+	}
+}
+
+func TestPendingChargeWithLostRefIsFoundAndRefunded(t *testing.T) {
+	db := dbtest.New(t)
+	prov := NewTestStripeProvider()
+	repo := repository.NewPaymentRepository(db)
+	svc := NewPaymentService(repo, prov)
+	ctx := context.Background()
+	if _, err := prov.Charge(ctx, "order-9", 4500, "USD"); err != nil {
+		t.Fatal(err)
+	}
+	p := &model.Payment{IdempotencyKey: "order-9", OrderID: 9, BuyerID: 5, AmountCents: 4500, Currency: "USD"}
+	if err := repo.InsertPending(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RefundOrder(ctx, 9); err != nil {
+		t.Fatal(err)
+	}
+	var st string
+	db.QueryRow(`SELECT status FROM payments WHERE id = $1`, p.ID).Scan(&st)
+	if st != "failed" || !prov.refunded[refundKey(p.ID)] {
+		t.Fatalf("status=%s refunded=%v", st, prov.refunded)
+	}
+}
+
+func TestUnknownChargeOutcomeStaysPending(t *testing.T) {
+	db := dbtest.New(t)
+	svc := NewPaymentService(repository.NewPaymentRepository(db), NewTestStripeProvider())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p, err := svc.Charge(ctx, 5, charge())
+	if !errors.Is(err, ErrPaymentFailed) || p == nil || p.Status != model.StatusPending {
+		t.Fatalf("p=%+v err=%v", p, err)
 	}
 }

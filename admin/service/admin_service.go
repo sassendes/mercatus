@@ -17,7 +17,7 @@ var (
 	ErrNotFound       = errors.New("target not found or already in that state")
 )
 
-var validTargets = map[string]bool{"product": true, "seller": true, "review": true}
+var validTargets = map[string]bool{"product": true, "seller": true, "review": true, "buyer": true}
 
 type AdminService struct{ admin *repository.AdminRepository }
 

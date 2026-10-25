@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -21,8 +22,21 @@ func newFraudClient(url, token string) *fraudClient {
 	return &fraudClient{url: url, token: token, client: &http.Client{Timeout: 2 * time.Second}}
 }
 
-func (f *fraudClient) Score(ctx context.Context, buyerID, amount int64, newAccount bool) (pipelineservice.FraudDecision, error) {
-	body, _ := json.Marshal(map[string]any{"buyer_id": buyerID, "amount_cents": amount, "new_account": newAccount})
+func (f *fraudClient) Score(ctx context.Context, buyerID, amount int64, newAccount bool, ipCountry string) (pipelineservice.FraudDecision, error) {
+	body, _ := json.Marshal(map[string]any{"buyer_id": buyerID, "amount_cents": amount, "new_account": newAccount, "ip_country": ipCountry})
+	d, err := f.score(ctx, body)
+	if err == nil || ctx.Err() != nil {
+		return d, err
+	}
+	select {
+	case <-ctx.Done():
+		return "", errors.Join(err, ctx.Err())
+	case <-time.After(250 * time.Millisecond):
+	}
+	return f.score(ctx, body)
+}
+
+func (f *fraudClient) score(ctx context.Context, body []byte) (pipelineservice.FraudDecision, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url+"/score", bytes.NewReader(body))
 	if err != nil {
 		return "", err

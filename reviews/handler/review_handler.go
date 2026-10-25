@@ -65,7 +65,7 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 	rv, err := h.reviews.Create(r.Context(), uid, &req)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrInvalidRating), errors.Is(err, service.ErrInvalidText):
+		case errors.Is(err, service.ErrInvalidRating), errors.Is(err, service.ErrInvalidText), errors.Is(err, service.ErrOwnProduct):
 			writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, service.ErrProductNotFound):
 			writeError(w, http.StatusNotFound, err.Error())

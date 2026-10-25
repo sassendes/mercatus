@@ -35,9 +35,10 @@ type Cart struct {
 }
 
 type VariantInfo struct {
-	VariantID int64
-	SellerID  int64
-	Price     int64
-	Currency  string
-	Available int
+	VariantID    int64
+	SellerID     int64
+	SellerUserID int64
+	Price        int64
+	Currency     string
+	Available    int
 }
